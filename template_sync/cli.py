@@ -1,3 +1,7 @@
+"""
+Command-line interface for template-sync.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path

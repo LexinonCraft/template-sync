@@ -1,3 +1,7 @@
+"""
+Core functionality for template-sync, including loading templates, applying them to target directories, and managing state.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
