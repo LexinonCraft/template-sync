@@ -7,6 +7,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import click
+from more_termcolor import colored
 
 from template_sync.core import (
     TemplateDefinition,
@@ -29,6 +30,55 @@ def entrypoint() -> None:
     """
 
 
+def _style(message: str, color: str) -> str:
+    """Apply terminal color to a message.
+
+    Args:
+        message: Text to colorize.
+        color: Foreground color name.
+
+    Returns:
+        Colorized text suitable for terminal output.
+    """
+    return colored(message, color)
+
+
+def _echo_info(message: str) -> None:
+    """Print an informational message in a consistent style.
+
+    Args:
+        message: Informational text.
+
+    Returns:
+        None.
+    """
+    click.echo(_style(message, "cyan"))
+
+
+def _echo_success(message: str) -> None:
+    """Print a success message in a consistent style.
+
+    Args:
+        message: Success text.
+
+    Returns:
+        None.
+    """
+    click.echo(_style(message, "green"))
+
+
+def _echo_note(message: str) -> None:
+    """Print a neutral note message in a consistent style.
+
+    Args:
+        message: Note text.
+
+    Returns:
+        None.
+    """
+    click.echo(_style(message, "white"))
+
+
 @entrypoint.command("list")
 @click.option("--repo", "repo_path", required=True, type=click.Path(path_type=Path, exists=True, file_okay=False))
 @click.option("--config", "config_file", default="templates.json", show_default=True)
@@ -47,11 +97,11 @@ def list_templates(repo_path: Path, config_file: str) -> None:
     except TemplateSyncError as exc:
         raise click.ClickException(str(exc)) from exc
 
-    click.echo(f"Templates in {repository.root}:")
+    _echo_info(f"Templates in {repository.root}:")
     for name in sorted(repository.templates):
         template = repository.templates[name]
         description = f" - {template.description}" if template.description else ""
-        click.echo(
+        _echo_note(
             f"- {template.name}{description}"
             f" (parameters: {len(template.parameters)}, files: {len(template.files)})"
         )
@@ -91,6 +141,8 @@ def apply_template_command(
     try:
         repository = load_template_repository(repo_path=repo_path, config_file=config_file)
         selected_template = _resolve_template_selection(repository.templates, template_name)
+        _echo_info(f"Using template '{selected_template.name}' from {repository.root}")
+        _echo_note(f"Target directory: {target_dir.resolve()}")
 
         parameter_values = parse_key_value_pairs(parameter_overrides)
         if not non_interactive:
@@ -106,8 +158,8 @@ def apply_template_command(
     except TemplateSyncError as exc:
         raise click.ClickException(str(exc)) from exc
 
-    click.echo(f"Applied template '{selected_template.name}' to {target_dir.resolve()}")
-    click.echo(f"State written to: {state_file}")
+    _echo_success(f"Applied template '{selected_template.name}' to {target_dir.resolve()}")
+    _echo_note(f"State written to: {state_file}")
 
 
 @entrypoint.command("config-example")
@@ -176,11 +228,11 @@ def _resolve_template_selection(
         return template
 
     ordered_names = sorted(templates)
-    click.echo("Choose a template:")
+    _echo_info("Choose a template:")
     for idx, name in enumerate(ordered_names, start=1):
         description = templates[name].description
         suffix = f" - {description}" if description else ""
-        click.echo(f"{idx}. {name}{suffix}")
+        _echo_note(f"{idx}. {name}{suffix}")
 
     selected_index = click.prompt(
         "Template number",
@@ -203,6 +255,13 @@ def _collect_missing_parameter_values(
         Completed parameter map including prompted/defaulted values.
     """
     values = dict(current_values)
+    missing_parameters = [parameter for parameter in template.parameters if parameter.name not in values]
+    if missing_parameters:
+        _echo_info(
+            f"{len(missing_parameters)} argument(s) missing for template '{template.name}'."
+        )
+        _echo_note("You can provide these with --set KEY=VALUE to skip prompts.")
+
     for parameter in template.parameters:
         if parameter.name in values:
             continue

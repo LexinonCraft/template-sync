@@ -94,4 +94,5 @@ def test_apply_command_interactive_selection_and_prompt(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert "Choose a template" in result.output
+    assert "1 argument(s) missing for template 'assignment'." in result.output
     assert (target / "main.typ").read_text(encoding="utf-8") == "Hello Nora\n"
