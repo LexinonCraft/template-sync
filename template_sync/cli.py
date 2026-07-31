@@ -19,14 +19,29 @@ from template_sync.core import (
 
 @click.group()
 def entrypoint() -> None:
-    """Synchronize template bundles from a template repository into target directories."""
+    """Register the root CLI group for template-sync commands.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+    """
 
 
 @entrypoint.command("list")
 @click.option("--repo", "repo_path", required=True, type=click.Path(path_type=Path, exists=True, file_okay=False))
 @click.option("--config", "config_file", default="templates.json", show_default=True)
 def list_templates(repo_path: Path, config_file: str) -> None:
-    """List available templates in the template repository."""
+    """List template names and summary info from a template repository.
+
+    Args:
+        repo_path: Path to the template repository root.
+        config_file: Template config filename inside the repository.
+
+    Returns:
+        None.
+    """
     try:
         repository = load_template_repository(repo_path=repo_path, config_file=config_file)
     except TemplateSyncError as exc:
@@ -59,7 +74,20 @@ def apply_template_command(
     non_interactive: bool,
     force: bool,
 ) -> None:
-    """Apply a template to the target directory."""
+    """Apply one template bundle into a destination directory.
+
+    Args:
+        template_name: Optional template name. If omitted, interactive selection is used.
+        repo_path: Path to the template repository root.
+        target_dir: Destination directory where files should be generated.
+        config_file: Template config filename inside the repository.
+        parameter_overrides: Tuple of KEY=VALUE parameter assignments.
+        non_interactive: If True, fail instead of prompting for missing values.
+        force: If True, overwrite existing files in target_dir.
+
+    Returns:
+        None.
+    """
     try:
         repository = load_template_repository(repo_path=repo_path, config_file=config_file)
         selected_template = _resolve_template_selection(repository.templates, template_name)
@@ -84,7 +112,14 @@ def apply_template_command(
 
 @entrypoint.command("config-example")
 def config_example() -> None:
-    """Print an example templates.json configuration."""
+    """Print an example templates.json configuration payload.
+
+    Args:
+        None.
+
+    Returns:
+        None.
+    """
     click.echo(
         """{
   "templates": {
@@ -119,6 +154,18 @@ def _resolve_template_selection(
     templates: dict[str, TemplateDefinition],
     selected_name: str | None,
 ) -> TemplateDefinition:
+    """Resolve a template choice from explicit name or interactive selection.
+
+    Args:
+        templates: Available templates keyed by template name.
+        selected_name: Optional user-provided template name.
+
+    Returns:
+        The selected TemplateDefinition.
+
+    Raises:
+        TemplateSyncError: If selected_name is provided but not found.
+    """
     if selected_name:
         template = templates.get(selected_name)
         if template is None:
@@ -146,6 +193,15 @@ def _collect_missing_parameter_values(
     template: TemplateDefinition,
     current_values: dict[str, str],
 ) -> dict[str, str]:
+    """Prompt user for any template parameters that are still missing.
+
+    Args:
+        template: Template definition containing parameter metadata.
+        current_values: Already provided parameter values.
+
+    Returns:
+        Completed parameter map including prompted/defaulted values.
+    """
     values = dict(current_values)
     for parameter in template.parameters:
         if parameter.name in values:

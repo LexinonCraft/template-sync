@@ -4,13 +4,13 @@ Core functionality for template-sync, including loading templates, applying them
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import UTC, datetime
 import hashlib
 import json
-from pathlib import Path
 import shutil
 import subprocess
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from jinja2 import StrictUndefined, Template
@@ -56,6 +56,18 @@ class TemplateRepository:
 
 
 def load_template_repository(repo_path: Path, config_file: str = "templates.json") -> TemplateRepository:
+    """Load and validate template repository configuration.
+
+    Args:
+        repo_path: Path to the root of the template repository.
+        config_file: Name of the JSON config file inside repo_path.
+
+    Returns:
+        Parsed TemplateRepository with validated template definitions.
+
+    Raises:
+        TemplateSyncError: If paths are invalid, JSON is invalid, or schema checks fail.
+    """
     root = repo_path.expanduser().resolve()
     config_path = root / config_file
 
@@ -84,6 +96,18 @@ def load_template_repository(repo_path: Path, config_file: str = "templates.json
 
 
 def _parse_template_definition(template_name: str, template_data: Any) -> TemplateDefinition:
+    """Parse a single template definition object from repository config.
+
+    Args:
+        template_name: Key/name of the template in the config file.
+        template_data: Raw JSON value for this template.
+
+    Returns:
+        Normalized TemplateDefinition instance.
+
+    Raises:
+        TemplateSyncError: If the template definition has an invalid structure.
+    """
     if not isinstance(template_data, dict):
         raise TemplateSyncError(f"Template '{template_name}' must be an object")
 
@@ -101,6 +125,18 @@ def _parse_template_definition(template_name: str, template_data: Any) -> Templa
 
 
 def _parse_parameters(template_name: str, raw_parameters: Any) -> list[TemplateParameter]:
+    """Parse and validate parameter specifications for one template.
+
+    Args:
+        template_name: Name of the template being parsed.
+        raw_parameters: Raw JSON value from the template's parameters field.
+
+    Returns:
+        List of normalized TemplateParameter entries.
+
+    Raises:
+        TemplateSyncError: If parameter entries are malformed or duplicated.
+    """
     if not isinstance(raw_parameters, list):
         raise TemplateSyncError(f"Template '{template_name}': 'parameters' must be a list")
 
@@ -149,6 +185,18 @@ def _parse_parameters(template_name: str, raw_parameters: Any) -> list[TemplateP
 
 
 def _parse_files(template_name: str, raw_files: Any) -> list[TemplateFile]:
+    """Parse and validate file mapping entries for one template.
+
+    Args:
+        template_name: Name of the template being parsed.
+        raw_files: Raw JSON value from the template's files field.
+
+    Returns:
+        List of normalized TemplateFile entries.
+
+    Raises:
+        TemplateSyncError: If file entries are missing required fields or invalid.
+    """
     if not isinstance(raw_files, list) or not raw_files:
         raise TemplateSyncError(f"Template '{template_name}': 'files' must be a non-empty list")
 
@@ -184,12 +232,32 @@ def _parse_files(template_name: str, raw_files: Any) -> list[TemplateFile]:
 
 
 def _default_target_name(source: str, jinja: bool) -> str:
+    """Derive a default target filename from a source path.
+
+    Args:
+        source: Source file path from template configuration.
+        jinja: Whether the source should be rendered as Jinja2.
+
+    Returns:
+        Default target path. For Jinja files ending with .j2, the suffix is removed.
+    """
     if jinja and source.endswith(".j2"):
         return source[:-3]
     return source
 
 
 def parse_key_value_pairs(values: tuple[str, ...]) -> dict[str, str]:
+    """Parse CLI-style KEY=VALUE arguments into a dictionary.
+
+    Args:
+        values: Tuple of raw override strings passed via CLI.
+
+    Returns:
+        Mapping from parameter names to provided string values.
+
+    Raises:
+        TemplateSyncError: If any item is not in KEY=VALUE format.
+    """
     result: dict[str, str] = {}
     for raw in values:
         if "=" not in raw:
@@ -206,6 +274,15 @@ def find_missing_parameters(
     template: TemplateDefinition,
     provided_values: dict[str, str],
 ) -> list[TemplateParameter]:
+    """Find required parameters not satisfied by provided values/defaults.
+
+    Args:
+        template: Template definition containing parameter metadata.
+        provided_values: Parameter values currently available.
+
+    Returns:
+        Required parameters that still need explicit values.
+    """
     missing: list[TemplateParameter] = []
     for parameter in template.parameters:
         if parameter.name in provided_values:
@@ -224,6 +301,21 @@ def apply_template(
     parameter_values: dict[str, str],
     force: bool,
 ) -> Path:
+    """Apply one template into a target directory and persist generation state.
+
+    Args:
+        repository: Template repository metadata and root path.
+        template: Template definition to apply.
+        target_dir: Destination directory for copied/rendered files.
+        parameter_values: Parameter values used for Jinja2 rendering.
+        force: If True, overwrite existing target files.
+
+    Returns:
+        Path to the generated state file in target_dir.
+
+    Raises:
+        TemplateSyncError: If validation fails, files are missing, or writes are unsafe.
+    """
     unresolved_parameters = find_missing_parameters(template, parameter_values)
     if unresolved_parameters:
         missing_names = ", ".join(param.name for param in unresolved_parameters)
@@ -287,6 +379,18 @@ def apply_template(
 
 
 def _render_template(path: Path, parameters: dict[str, str]) -> str:
+    """Render a Jinja2 template file with strict variable handling.
+
+    Args:
+        path: Path to the source template file.
+        parameters: Values exposed to the Jinja2 render context.
+
+    Returns:
+        Rendered text content.
+
+    Raises:
+        TemplateSyncError: If Jinja2 rendering fails.
+    """
     template_source = path.read_text(encoding="utf-8")
     template = Template(template_source, undefined=StrictUndefined, keep_trailing_newline=True)
     try:
@@ -296,6 +400,19 @@ def _render_template(path: Path, parameters: dict[str, str]) -> str:
 
 
 def _validate_source_under_repository(repository_root: Path, source_path: Path, source_label: str) -> None:
+    """Ensure a configured source file path stays inside the repository root.
+
+    Args:
+        repository_root: Canonical root directory of the template repository.
+        source_path: Resolved source path to validate.
+        source_label: Original source value from config for error reporting.
+
+    Returns:
+        None.
+
+    Raises:
+        TemplateSyncError: If source_path escapes repository_root.
+    """
     try:
         source_path.relative_to(repository_root)
     except ValueError as exc:
@@ -305,6 +422,19 @@ def _validate_source_under_repository(repository_root: Path, source_path: Path, 
 
 
 def _validate_target_under_directory(target_root: Path, target_path: Path, target_label: str) -> None:
+    """Ensure a configured destination file path stays inside target root.
+
+    Args:
+        target_root: Canonical destination directory.
+        target_path: Resolved destination path to validate.
+        target_label: Original target value from config for error reporting.
+
+    Returns:
+        None.
+
+    Raises:
+        TemplateSyncError: If target_path escapes target_root.
+    """
     try:
         target_path.relative_to(target_root)
     except ValueError as exc:
@@ -320,6 +450,18 @@ def write_state_file(
     parameters: dict[str, str],
     file_records: list[dict[str, Any]],
 ) -> Path:
+    """Write generation metadata used for traceability and future sync features.
+
+    Args:
+        repository: Source repository metadata.
+        template: Applied template definition.
+        target_dir: Directory where output files were written.
+        parameters: Final parameter values used for rendering.
+        file_records: Per-file metadata records for generated files.
+
+    Returns:
+        Path to the written state.json file.
+    """
     state_dir = target_dir / STATE_DIR_NAME
     state_dir.mkdir(parents=True, exist_ok=True)
     state_file = state_dir / STATE_FILE_NAME
@@ -342,6 +484,14 @@ def write_state_file(
 
 
 def get_repository_commit(repository_root: Path) -> str | None:
+    """Read the current git commit hash for a repository, if available.
+
+    Args:
+        repository_root: Directory where the git command should run.
+
+    Returns:
+        Commit hash string, or None when git is unavailable or command fails.
+    """
     try:
         completed = subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -358,6 +508,14 @@ def get_repository_commit(repository_root: Path) -> str | None:
 
 
 def _sha256_file(path: Path) -> str:
+    """Compute SHA-256 checksum for a file.
+
+    Args:
+        path: Path to the file to hash.
+
+    Returns:
+        Lowercase hex digest of the file contents.
+    """
     digest = hashlib.sha256()
     with path.open("rb") as file_handle:
         while True:
