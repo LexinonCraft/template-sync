@@ -18,16 +18,9 @@ from template_sync.core import (
 )
 
 
-@click.group()
+@click.group(help="Manage and apply template bundles from a repository.")
 def entrypoint() -> None:
-    """Register the root CLI group for template-sync commands.
-
-    Args:
-        None.
-
-    Returns:
-        None.
-    """
+    pass
 
 
 def _style(message: str, color: str) -> str:
