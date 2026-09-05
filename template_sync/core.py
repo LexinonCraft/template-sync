@@ -14,7 +14,9 @@ from pathlib import Path
 from typing import Any
 
 from jinja2 import StrictUndefined, Template
+from git import Repo
 
+from .git_utils import AbstractRepo, get_repo
 
 STATE_DIR_NAME = ".template-sync"
 STATE_FILE_NAME = "state.json"
@@ -50,16 +52,16 @@ class TemplateDefinition:
 
 @dataclass(frozen=True)
 class TemplateRepository:
-    root: Path
-    config_path: Path
+    repo: AbstractRepo
     templates: dict[str, TemplateDefinition]
 
 
-def load_template_repository(repo_path: Path, config_file: str = "templates.json") -> TemplateRepository:
+def load_template_repository(repo_path: Path, repo_rev: str | None = None, config_file: str = "templates.json") -> TemplateRepository:
     """Load and validate template repository configuration.
 
     Args:
         repo_path: Path to the root of the template repository.
+        repo_rev: Optional git revision to checkout before reading the config.
         config_file: Name of the JSON config file inside repo_path.
 
     Returns:
@@ -68,18 +70,12 @@ def load_template_repository(repo_path: Path, config_file: str = "templates.json
     Raises:
         TemplateSyncError: If paths are invalid, JSON is invalid, or schema checks fail.
     """
-    root = repo_path.expanduser().resolve()
-    config_path = root / config_file
-
-    if not root.is_dir():
-        raise TemplateSyncError(f"Template repository path does not exist: {root}")
-    if not config_path.is_file():
-        raise TemplateSyncError(f"Template config file not found: {config_path}")
+    repo = get_repo(repo_path, rev=repo_rev)
 
     try:
-        config_data = json.loads(config_path.read_text(encoding="utf-8"))
+        config_data = json.loads(repo.read_file_path(Path(config_file)))
     except json.JSONDecodeError as exc:
-        raise TemplateSyncError(f"Invalid JSON in config file {config_path}: {exc}") from exc
+        raise TemplateSyncError(f"Invalid JSON in config file {config_file}: {exc}") from exc
 
     raw_templates = config_data.get("templates")
     if not isinstance(raw_templates, dict):
@@ -92,7 +88,7 @@ def load_template_repository(repo_path: Path, config_file: str = "templates.json
     if not templates:
         raise TemplateSyncError("No templates defined in config file")
 
-    return TemplateRepository(root=root, config_path=config_path, templates=templates)
+    return TemplateRepository(repo=repo, templates=templates)
 
 
 def _parse_template_definition(template_name: str, template_data: Any) -> TemplateDefinition:
@@ -338,11 +334,6 @@ def apply_template(
 
     written_files: list[dict[str, Any]] = []
     for file_spec in template.files:
-        source_path = (repository.root / file_spec.source).resolve()
-        _validate_source_under_repository(repository.root, source_path, file_spec.source)
-        if not source_path.is_file():
-            raise TemplateSyncError(f"Template source file does not exist: {source_path}")
-
         destination_path = (target / file_spec.target).resolve()
         _validate_target_under_directory(target, destination_path, file_spec.target)
         destination_path.parent.mkdir(parents=True, exist_ok=True)
@@ -353,10 +344,10 @@ def apply_template(
             )
 
         if file_spec.jinja:
-            rendered = _render_template(source_path, final_parameters)
+            rendered = _render_template(repository.repo.read_file(file_spec.source), final_parameters)
             destination_path.write_text(rendered, encoding="utf-8")
         else:
-            shutil.copyfile(source_path, destination_path)
+            repository.repo.copy_file(Path(file_spec.source), destination_path)
 
         written_files.append(
             {
@@ -364,7 +355,7 @@ def apply_template(
                 "target": str(destination_path.relative_to(target)),
                 "mode": file_spec.mode,
                 "jinja": file_spec.jinja,
-                "source_sha256": _sha256_file(source_path),
+                "source_sha256": _sha256_file(repository.repo.read_file(file_spec.source)),
             }
         )
 
@@ -374,15 +365,16 @@ def apply_template(
         target_dir=target,
         parameters=final_parameters,
         file_records=written_files,
+        force=force,
     )
     return state_file
 
 
-def _render_template(path: Path, parameters: dict[str, str]) -> str:
+def _render_template(source: str, parameters: dict[str, str]) -> str:
     """Render a Jinja2 template file with strict variable handling.
 
     Args:
-        path: Path to the source template file.
+        source: Source content of the template file.
         parameters: Values exposed to the Jinja2 render context.
 
     Returns:
@@ -391,12 +383,11 @@ def _render_template(path: Path, parameters: dict[str, str]) -> str:
     Raises:
         TemplateSyncError: If Jinja2 rendering fails.
     """
-    template_source = path.read_text(encoding="utf-8")
-    template = Template(template_source, undefined=StrictUndefined, keep_trailing_newline=True)
+    template = Template(source, undefined=StrictUndefined, keep_trailing_newline=True)
     try:
         return template.render(**parameters)
     except Exception as exc:
-        raise TemplateSyncError(f"Failed to render Jinja2 template {path}: {exc}") from exc
+        raise TemplateSyncError(f"Failed to render Jinja2 template: {exc}") from exc
 
 
 def _validate_source_under_repository(repository_root: Path, source_path: Path, source_label: str) -> None:
@@ -449,6 +440,7 @@ def write_state_file(
     target_dir: Path,
     parameters: dict[str, str],
     file_records: list[dict[str, Any]],
+    force: bool,
 ) -> Path:
     """Write generation metadata used for traceability and future sync features.
 
@@ -458,6 +450,7 @@ def write_state_file(
         target_dir: Directory where output files were written.
         parameters: Final parameter values used for rendering.
         file_records: Per-file metadata records for generated files.
+        force: If True, overwrite existing state file.
 
     Returns:
         Path to the written state.json file.
@@ -466,15 +459,21 @@ def write_state_file(
     state_dir.mkdir(parents=True, exist_ok=True)
     state_file = state_dir / STATE_FILE_NAME
 
+    if state_file.exists() and not force:
+        raise TemplateSyncError(
+            f"State file already exists: {state_file}. Use --force to overwrite."
+        )
+
     payload = {
         "schema_version": 1,
         "generated_at": datetime.now(tz=UTC).isoformat(),
         "template": template.name,
         "parameters": parameters,
         "template_repository": {
-            "path": str(repository.root),
-            "config_file": str(repository.config_path.name),
-            "commit": get_repository_commit(repository.root),
+            "path": str(repository.repo.get_root()),
+            "config_file": "templates.json",
+            "ref": repository.repo.get_ref(),
+            "commit": repository.repo.get_commit_hash(),
         },
         "files": file_records,
     }
@@ -507,20 +506,15 @@ def get_repository_commit(repository_root: Path) -> str | None:
     return commit if commit else None
 
 
-def _sha256_file(path: Path) -> str:
+def _sha256_file(content: str) -> str:
     """Compute SHA-256 checksum for a file.
 
     Args:
-        path: Path to the file to hash.
+        content: File content to hash.
 
     Returns:
         Lowercase hex digest of the file contents.
     """
     digest = hashlib.sha256()
-    with path.open("rb") as file_handle:
-        while True:
-            chunk = file_handle.read(1024 * 1024)
-            if not chunk:
-                break
-            digest.update(chunk)
+    digest.update(content.encode("utf-8"))
     return digest.hexdigest()

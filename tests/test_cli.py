@@ -55,6 +55,7 @@ def test_apply_command_non_interactive_writes_files(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     target = tmp_path / "target"
     repo_root.mkdir()
+    target.mkdir()
     _create_cli_repository(repo_root)
 
     runner = CliRunner()
@@ -68,7 +69,7 @@ def test_apply_command_non_interactive_writes_files(tmp_path: Path) -> None:
             "--target-dir",
             str(target),
             "--non-interactive",
-            "--set",
+            "-p",
             "name=Lin",
         ],
     )

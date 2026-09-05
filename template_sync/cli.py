@@ -86,11 +86,12 @@ def list_templates(repo_path: Path, config_file: str) -> None:
         None.
     """
     try:
-        repository = load_template_repository(repo_path=repo_path, config_file=config_file)
+        resolved_repo_path = repo_path.expanduser().resolve()
+        repository = load_template_repository(repo_path=resolved_repo_path, config_file=config_file)
     except TemplateSyncError as exc:
         raise click.ClickException(str(exc)) from exc
 
-    _echo_info(f"Templates in {repository.root}:")
+    _echo_info(f"Templates in {resolved_repo_path}:")
     for name in sorted(repository.templates):
         template = repository.templates[name]
         description = f" - {template.description}" if template.description else ""
@@ -100,41 +101,30 @@ def list_templates(repo_path: Path, config_file: str) -> None:
         )
 
 
-@entrypoint.command("apply")
+@entrypoint.command("apply", help="Apply a template from a repository to a target directory.")
 @click.argument("template_name", required=False)
 @click.option("--repo", "repo_path", required=True, type=click.Path(path_type=Path, exists=True, file_okay=False))
+@click.option("--rev", "repo_rev", default=None, help="Git revision to checkout in the repository.")
 @click.option("--target-dir", default=".", type=click.Path(path_type=Path, file_okay=False), show_default=True)
 @click.option("--config", "config_file", default="templates.json", show_default=True)
-@click.option("--set", "parameter_overrides", multiple=True, help="Parameter override in KEY=VALUE form.")
+@click.option("-p", "--parameter", "parameter_overrides", multiple=True, help="Parameter override in KEY=VALUE form.")
 @click.option("--non-interactive", is_flag=True, help="Fail if required parameters are missing.")
-@click.option("--force", is_flag=True, help="Overwrite existing files in target directory.")
+@click.option("--force", is_flag=True, help="Overwrite existing files in target directory.")  # TODO
 def apply_template_command(
     template_name: str | None,
     repo_path: Path,
+    repo_rev: str | None,
     target_dir: Path,
     config_file: str,
     parameter_overrides: tuple[str, ...],
     non_interactive: bool,
     force: bool,
 ) -> None:
-    """Apply one template bundle into a destination directory.
-
-    Args:
-        template_name: Optional template name. If omitted, interactive selection is used.
-        repo_path: Path to the template repository root.
-        target_dir: Destination directory where files should be generated.
-        config_file: Template config filename inside the repository.
-        parameter_overrides: Tuple of KEY=VALUE parameter assignments.
-        non_interactive: If True, fail instead of prompting for missing values.
-        force: If True, overwrite existing files in target_dir.
-
-    Returns:
-        None.
-    """
     try:
-        repository = load_template_repository(repo_path=repo_path, config_file=config_file)
+        resolved_repo_path = repo_path.expanduser().resolve()
+        repository = load_template_repository(repo_path=resolved_repo_path, repo_rev=repo_rev, config_file=config_file)
         selected_template = _resolve_template_selection(repository.templates, template_name)
-        _echo_info(f"Using template '{selected_template.name}' from {repository.root}")
+        _echo_info(f"Using template '{selected_template.name}' from {resolved_repo_path}{f" at revision '{repository.repo.get_ref()}'" if repository.repo.get_ref() else ''}.")
         _echo_note(f"Target directory: {target_dir.resolve()}")
 
         parameter_values = parse_key_value_pairs(parameter_overrides)
@@ -253,7 +243,7 @@ def _collect_missing_parameter_values(
         _echo_info(
             f"{len(missing_parameters)} argument(s) missing for template '{template.name}'."
         )
-        _echo_note("You can provide these with --set KEY=VALUE to skip prompts.")
+        _echo_note("You can provide these with -p KEY=VALUE to skip prompts.")
 
     for parameter in template.parameters:
         if parameter.name in values:
