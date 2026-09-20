@@ -49,37 +49,26 @@ Start writing here.
 EOF
 ```
 
-Create templates.json:
+Create templates.yaml:
 
 ```bash
-cat > templates.json << 'EOF'
-{
-  "templates": {
-    "typst-assignment": {
-      "description": "Typst sheet submission",
-      "parameters": [
-        "class_name",
-        "student_name",
-        "sheet_number",
-        {"name": "year", "default": "2026"}
-      ],
-      "files": [
-        {
-          "source": "typst/common.typ",
-          "target": "common.typ",
-          "mode": "static",
-          "jinja": false
-        },
-        {
-          "source": "typst/assignment.typ.j2",
-          "target": "main.typ",
-          "mode": "dynamic",
-          "jinja": true
-        }
-      ]
-    }
-  }
-}
+cat > templates.yaml << 'EOF'
+version: snapshot
+
+templates:
+  assignment:
+    description: Test template
+    parameters:
+      - name
+    files:
+      - source: templates/base.typ
+        target: base.typ
+        mode: static
+        jinja: false
+      - source: templates/doc.typ.j2
+        target: main.typ
+        mode: dynamic
+        jinja: true
 EOF
 ```
 
@@ -125,8 +114,7 @@ Implemented now:
 - CLI commands:
   - list: list available templates from a template repository
   - apply: apply a selected template into a target directory
-  - config-example: print an example templates JSON file
-- JSON template config parsing with validation
+- YAML template config parsing with validation
 - support for static and dynamic template files
 - Jinja2 rendering for dynamic files
 - parameter input via:
@@ -150,7 +138,7 @@ Not implemented yet:
 
 ## Template Config Shape
 
-Template bundles are defined in a JSON file (default name: `templates.json`) in the template repository.
+Template bundles are defined in a YAML file (default name: `templates.yaml`) in the template repository.
 
 Each template includes:
 

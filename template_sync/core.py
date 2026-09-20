@@ -5,8 +5,6 @@ Core functionality for template-sync, including loading templates, applying them
 from __future__ import annotations
 
 import hashlib
-import json
-import shutil
 import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -14,9 +12,18 @@ from pathlib import Path
 from typing import Any
 
 from jinja2 import StrictUndefined, Template
-from git import Repo
 
 from .git_utils import AbstractRepo, get_repo
+from .model import (
+    ParameterDefinition,
+    StateFileRecord,
+    StateTemplateRepository,
+    TemplateDefinition,
+    TemplateRepositoryConfig,
+    TemplateSyncState,
+    parse_template_repo_config,
+    serialize_state_file,
+)
 
 STATE_DIR_NAME = ".template-sync"
 STATE_FILE_NAME = "state.json"
@@ -27,219 +34,31 @@ class TemplateSyncError(Exception):
 
 
 @dataclass(frozen=True)
-class TemplateParameter:
-    name: str
-    prompt: str | None = None
-    default: str | None = None
-    required: bool = True
-
-
-@dataclass(frozen=True)
-class TemplateFile:
-    source: str
-    target: str
-    mode: str
-    jinja: bool
-
-
-@dataclass(frozen=True)
-class TemplateDefinition:
-    name: str
-    description: str
-    parameters: tuple[TemplateParameter, ...]
-    files: tuple[TemplateFile, ...]
-
-
-@dataclass(frozen=True)
 class TemplateRepository:
     repo: AbstractRepo
-    templates: dict[str, TemplateDefinition]
+    config: TemplateRepositoryConfig
 
 
-def load_template_repository(repo_path: Path, repo_rev: str | None = None, config_file: str = "templates.json") -> TemplateRepository:
+def load_template_repository(repo_path: Path, repo_rev: str | None = None, config_file: str = "templates.yaml") -> TemplateRepository:
     """Load and validate template repository configuration.
 
     Args:
         repo_path: Path to the root of the template repository.
         repo_rev: Optional git revision to checkout before reading the config.
-        config_file: Name of the JSON config file inside repo_path.
+        config_file: Name of the YAML config file inside repo_path.
 
     Returns:
         Parsed TemplateRepository with validated template definitions.
 
     Raises:
-        TemplateSyncError: If paths are invalid, JSON is invalid, or schema checks fail.
+        TemplateSyncError: If paths are invalid, YAML is invalid, or schema checks fail.
     """
     repo = get_repo(repo_path, rev=repo_rev)
 
-    try:
-        config_data = json.loads(repo.read_file_path(Path(config_file)))
-    except json.JSONDecodeError as exc:
-        raise TemplateSyncError(f"Invalid JSON in config file {config_file}: {exc}") from exc
+    config_content = repo.read_file(config_file)
+    config = parse_template_repo_config(config_content)
 
-    raw_templates = config_data.get("templates")
-    if not isinstance(raw_templates, dict):
-        raise TemplateSyncError("Config file must contain a top-level 'templates' object")
-
-    templates: dict[str, TemplateDefinition] = {}
-    for template_name, template_data in raw_templates.items():
-        templates[template_name] = _parse_template_definition(template_name, template_data)
-
-    if not templates:
-        raise TemplateSyncError("No templates defined in config file")
-
-    return TemplateRepository(repo=repo, templates=templates)
-
-
-def _parse_template_definition(template_name: str, template_data: Any) -> TemplateDefinition:
-    """Parse a single template definition object from repository config.
-
-    Args:
-        template_name: Key/name of the template in the config file.
-        template_data: Raw JSON value for this template.
-
-    Returns:
-        Normalized TemplateDefinition instance.
-
-    Raises:
-        TemplateSyncError: If the template definition has an invalid structure.
-    """
-    if not isinstance(template_data, dict):
-        raise TemplateSyncError(f"Template '{template_name}' must be an object")
-
-    description = str(template_data.get("description", ""))
-
-    parameters = _parse_parameters(template_name, template_data.get("parameters", []))
-    files = _parse_files(template_name, template_data.get("files"))
-
-    return TemplateDefinition(
-        name=template_name,
-        description=description,
-        parameters=tuple(parameters),
-        files=tuple(files),
-    )
-
-
-def _parse_parameters(template_name: str, raw_parameters: Any) -> list[TemplateParameter]:
-    """Parse and validate parameter specifications for one template.
-
-    Args:
-        template_name: Name of the template being parsed.
-        raw_parameters: Raw JSON value from the template's parameters field.
-
-    Returns:
-        List of normalized TemplateParameter entries.
-
-    Raises:
-        TemplateSyncError: If parameter entries are malformed or duplicated.
-    """
-    if not isinstance(raw_parameters, list):
-        raise TemplateSyncError(f"Template '{template_name}': 'parameters' must be a list")
-
-    parameters: list[TemplateParameter] = []
-    seen_names: set[str] = set()
-
-    for idx, item in enumerate(raw_parameters):
-        if isinstance(item, str):
-            parameter = TemplateParameter(name=item)
-        elif isinstance(item, dict):
-            name = item.get("name")
-            if not isinstance(name, str) or not name.strip():
-                raise TemplateSyncError(
-                    f"Template '{template_name}': parameters[{idx}] requires non-empty string 'name'"
-                )
-            prompt = item.get("prompt")
-            default = item.get("default")
-            required = item.get("required", True)
-
-            if prompt is not None and not isinstance(prompt, str):
-                raise TemplateSyncError(
-                    f"Template '{template_name}': parameters[{idx}] field 'prompt' must be a string"
-                )
-            if default is not None and not isinstance(default, str):
-                default = str(default)
-            if not isinstance(required, bool):
-                raise TemplateSyncError(
-                    f"Template '{template_name}': parameters[{idx}] field 'required' must be a boolean"
-                )
-
-            parameter = TemplateParameter(name=name, prompt=prompt, default=default, required=required)
-        else:
-            raise TemplateSyncError(
-                f"Template '{template_name}': parameters[{idx}] must be a string or object"
-            )
-
-        if parameter.name in seen_names:
-            raise TemplateSyncError(
-                f"Template '{template_name}': duplicate parameter '{parameter.name}'"
-            )
-
-        seen_names.add(parameter.name)
-        parameters.append(parameter)
-
-    return parameters
-
-
-def _parse_files(template_name: str, raw_files: Any) -> list[TemplateFile]:
-    """Parse and validate file mapping entries for one template.
-
-    Args:
-        template_name: Name of the template being parsed.
-        raw_files: Raw JSON value from the template's files field.
-
-    Returns:
-        List of normalized TemplateFile entries.
-
-    Raises:
-        TemplateSyncError: If file entries are missing required fields or invalid.
-    """
-    if not isinstance(raw_files, list) or not raw_files:
-        raise TemplateSyncError(f"Template '{template_name}': 'files' must be a non-empty list")
-
-    files: list[TemplateFile] = []
-    for idx, item in enumerate(raw_files):
-        if not isinstance(item, dict):
-            raise TemplateSyncError(f"Template '{template_name}': files[{idx}] must be an object")
-
-        source = item.get("source")
-        if not isinstance(source, str) or not source.strip():
-            raise TemplateSyncError(
-                f"Template '{template_name}': files[{idx}] requires non-empty string 'source'"
-            )
-
-        mode = item.get("mode", "static")
-        if mode not in {"static", "dynamic"}:
-            raise TemplateSyncError(
-                f"Template '{template_name}': files[{idx}] field 'mode' must be 'static' or 'dynamic'"
-            )
-
-        jinja = bool(item.get("jinja", False))
-        target = item.get("target")
-        if target is None:
-            target = _default_target_name(source, jinja)
-        if not isinstance(target, str) or not target.strip():
-            raise TemplateSyncError(
-                f"Template '{template_name}': files[{idx}] requires non-empty string 'target'"
-            )
-
-        files.append(TemplateFile(source=source, target=target, mode=mode, jinja=jinja))
-
-    return files
-
-
-def _default_target_name(source: str, jinja: bool) -> str:
-    """Derive a default target filename from a source path.
-
-    Args:
-        source: Source file path from template configuration.
-        jinja: Whether the source should be rendered as Jinja2.
-
-    Returns:
-        Default target path. For Jinja files ending with .j2, the suffix is removed.
-    """
-    if jinja and source.endswith(".j2"):
-        return source[:-3]
-    return source
+    return TemplateRepository(repo=repo, config=config)
 
 
 def parse_key_value_pairs(values: tuple[str, ...]) -> dict[str, str]:
@@ -269,7 +88,7 @@ def parse_key_value_pairs(values: tuple[str, ...]) -> dict[str, str]:
 def find_missing_parameters(
     template: TemplateDefinition,
     provided_values: dict[str, str],
-) -> list[TemplateParameter]:
+) -> list[ParameterDefinition]:
     """Find required parameters not satisfied by provided values/defaults.
 
     Args:
@@ -279,7 +98,7 @@ def find_missing_parameters(
     Returns:
         Required parameters that still need explicit values.
     """
-    missing: list[TemplateParameter] = []
+    missing: list[ParameterDefinition] = []
     for parameter in template.parameters:
         if parameter.name in provided_values:
             continue
@@ -292,6 +111,7 @@ def find_missing_parameters(
 
 def apply_template(
     repository: TemplateRepository,
+    template_name: str,
     template: TemplateDefinition,
     target_dir: Path,
     parameter_values: dict[str, str],
@@ -325,9 +145,7 @@ def apply_template(
     unknown_parameter_names = sorted(set(final_parameters.keys()) - {p.name for p in template.parameters})
     if unknown_parameter_names:
         unknown_text = ", ".join(unknown_parameter_names)
-        raise TemplateSyncError(
-            f"Unknown parameters for template '{template.name}': {unknown_text}"
-        )
+        raise TemplateSyncError(f"Unknown parameters for template '{template_name}': {unknown_text}")
 
     target = target_dir.expanduser().resolve()
     target.mkdir(parents=True, exist_ok=True)
@@ -339,9 +157,7 @@ def apply_template(
         destination_path.parent.mkdir(parents=True, exist_ok=True)
 
         if destination_path.exists() and not force:
-            raise TemplateSyncError(
-                f"Target file already exists: {destination_path}. Use --force to overwrite."
-            )
+            raise TemplateSyncError(f"Target file already exists: {destination_path}. Use --force to overwrite.")
 
         if file_spec.jinja:
             rendered = _render_template(repository.repo.read_file(file_spec.source), final_parameters)
@@ -361,6 +177,7 @@ def apply_template(
 
     state_file = write_state_file(
         repository=repository,
+        template_name=template_name,
         template=template,
         target_dir=target,
         parameters=final_parameters,
@@ -407,9 +224,7 @@ def _validate_source_under_repository(repository_root: Path, source_path: Path, 
     try:
         source_path.relative_to(repository_root)
     except ValueError as exc:
-        raise TemplateSyncError(
-            f"Template source path escapes repository root: {source_label}"
-        ) from exc
+        raise TemplateSyncError(f"Template source path escapes repository root: {source_label}") from exc
 
 
 def _validate_target_under_directory(target_root: Path, target_path: Path, target_label: str) -> None:
@@ -429,13 +244,12 @@ def _validate_target_under_directory(target_root: Path, target_path: Path, targe
     try:
         target_path.relative_to(target_root)
     except ValueError as exc:
-        raise TemplateSyncError(
-            f"Target path escapes destination directory: {target_label}"
-        ) from exc
+        raise TemplateSyncError(f"Target path escapes destination directory: {target_label}") from exc
 
 
 def write_state_file(
     repository: TemplateRepository,
+    template_name: str,
     template: TemplateDefinition,
     target_dir: Path,
     parameters: dict[str, str],
@@ -446,7 +260,7 @@ def write_state_file(
 
     Args:
         repository: Source repository metadata.
-        template: Applied template definition.
+        template_name: Name of the applied template.
         target_dir: Directory where output files were written.
         parameters: Final parameter values used for rendering.
         file_records: Per-file metadata records for generated files.
@@ -460,25 +274,21 @@ def write_state_file(
     state_file = state_dir / STATE_FILE_NAME
 
     if state_file.exists() and not force:
-        raise TemplateSyncError(
-            f"State file already exists: {state_file}. Use --force to overwrite."
-        )
+        raise TemplateSyncError(f"State file already exists: {state_file}. Use --force to overwrite.")
 
-    payload = {
-        "schema_version": 1,
-        "generated_at": datetime.now(tz=UTC).isoformat(),
-        "template": template.name,
-        "parameters": parameters,
-        "template_repository": {
-            "path": str(repository.repo.get_root()),
-            "config_file": "templates.json",
-            "ref": repository.repo.get_ref(),
-            "commit": repository.repo.get_commit_hash(),
-        },
-        "files": file_records,
-    }
-
-    state_file.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    state = TemplateSyncState(
+        generated_at=datetime.now(tz=UTC),
+        template=template_name,
+        parameters=parameters,
+        template_repository=StateTemplateRepository(
+            path=str(repository.repo.get_root()),
+            config_file="templates.yaml",
+            ref=repository.repo.get_ref(),
+            commit=repository.repo.get_commit_hash(),
+        ),
+        files=[StateFileRecord(**file_record) for file_record in file_records],
+    )
+    state_file.write_text(serialize_state_file(state), encoding="utf-8")
     return state_file
 
 
@@ -499,7 +309,7 @@ def get_repository_commit(repository_root: Path) -> str | None:
             capture_output=True,
             text=True,
         )
-    except (subprocess.SubprocessError, FileNotFoundError):
+    except subprocess.SubprocessError, FileNotFoundError:
         return None
 
     commit = completed.stdout.strip()

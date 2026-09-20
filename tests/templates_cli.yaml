@@ -1,0 +1,16 @@
+version: snapshot
+
+templates:
+  assignment:
+    description: Test template
+    parameters:
+      - name
+    files:
+      - source: templates/base.typ
+        target: base.typ
+        mode: static
+        jinja: false
+      - source: templates/doc.typ.j2
+        target: main.typ
+        mode: dynamic
+        jinja: true

@@ -21,34 +21,10 @@ def _create_basic_repository(repo_root: Path) -> Path:
         encoding="utf-8",
     )
 
-    config = {
-        "templates": {
-            "typst-assignment": {
-                "description": "Typst assignment template",
-                "parameters": [
-                    "title",
-                    {"name": "author", "prompt": "Author name"},
-                    {"name": "year", "default": "2026"},
-                ],
-                "files": [
-                    {
-                        "source": "templates/base.typ",
-                        "target": "base.typ",
-                        "mode": "static",
-                        "jinja": False,
-                    },
-                    {
-                        "source": "templates/doc.typ.j2",
-                        "target": "main.typ",
-                        "mode": "dynamic",
-                        "jinja": True,
-                    },
-                ],
-            }
-        }
-    }
-    config_path = repo_root / "templates.json"
-    config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    with open("tests/templates_core.yaml", "r", encoding="utf-8") as f:
+        config = f.read()
+    config_path = repo_root / "templates.yaml"
+    config_path.write_text(config)
     return config_path
 
 
@@ -60,8 +36,8 @@ def test_load_template_repository_parses_expected_fields(tmp_path: Path) -> None
     repository = load_template_repository(repo_root)
 
     # assert repository.root == repo_root.resolve()
-    assert "typst-assignment" in repository.templates
-    template = repository.templates["typst-assignment"]
+    assert "typst-assignment" in repository.config.templates
+    template = repository.config.templates["typst-assignment"]
     assert template.description == "Typst assignment template"
     assert len(template.parameters) == 3
     assert len(template.files) == 2
@@ -81,10 +57,11 @@ def test_apply_template_writes_rendered_files_and_state(tmp_path: Path) -> None:
     _create_basic_repository(repo_root)
 
     repository = load_template_repository(repo_root)
-    template = repository.templates["typst-assignment"]
+    template = repository.config.templates["typst-assignment"]
 
     state_path = apply_template(
         repository=repository,
+        template_name="typst-assignment",
         template=template,
         target_dir=target_dir,
         parameter_values={"title": "Sheet 1", "author": "Ada"},
@@ -113,11 +90,12 @@ def test_apply_template_requires_missing_parameters(tmp_path: Path) -> None:
     _create_basic_repository(repo_root)
 
     repository = load_template_repository(repo_root)
-    template = repository.templates["typst-assignment"]
+    template = repository.config.templates["typst-assignment"]
 
     with pytest.raises(TemplateSyncError, match="Missing required parameters"):
         apply_template(
             repository=repository,
+            template_name="typst-assignment",
             template=template,
             target_dir=tmp_path / "target",
             parameter_values={"title": "Sheet 1"},
@@ -132,7 +110,7 @@ def test_apply_template_force_overwrites_existing_files(tmp_path: Path) -> None:
     _create_basic_repository(repo_root)
 
     repository = load_template_repository(repo_root)
-    template = repository.templates["typst-assignment"]
+    template = repository.config.templates["typst-assignment"]
 
     target_dir.mkdir(parents=True, exist_ok=True)
     existing = target_dir / "base.typ"
@@ -141,6 +119,7 @@ def test_apply_template_force_overwrites_existing_files(tmp_path: Path) -> None:
     with pytest.raises(TemplateSyncError, match="already exists"):
         apply_template(
             repository=repository,
+            template_name="typst-assignment",
             template=template,
             target_dir=target_dir,
             parameter_values={"title": "Sheet 1", "author": "Ada"},
@@ -149,6 +128,7 @@ def test_apply_template_force_overwrites_existing_files(tmp_path: Path) -> None:
 
     apply_template(
         repository=repository,
+        template_name="typst-assignment",
         template=template,
         target_dir=target_dir,
         parameter_values={"title": "Sheet 1", "author": "Ada"},

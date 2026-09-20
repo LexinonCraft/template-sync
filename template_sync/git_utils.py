@@ -3,10 +3,12 @@ Utility functions for working with Git repositories.
 """
 
 from abc import ABC, abstractmethod
-import git
 from pathlib import Path
 
+import git
+
 default_revisions = ["main", "master"]
+
 
 def open_git_repo(repo_path: Path) -> git.Repo | None:
     """Try to open a Git repository at the given path.
@@ -19,8 +21,9 @@ def open_git_repo(repo_path: Path) -> git.Repo | None:
     """
     try:
         return git.Repo(repo_path)
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None
+
 
 def get_commit(repo: git.Repo, rev: str) -> git.Commit | None:
     """
@@ -36,8 +39,9 @@ def get_commit(repo: git.Repo, rev: str) -> git.Commit | None:
     try:
         commit = repo.commit(rev)
         return commit
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None
+
 
 class AbstractRepo(ABC):
     """
@@ -111,6 +115,7 @@ class AbstractRepo(ABC):
         with open(target_path, "w", encoding="utf-8") as f:
             f.write(content)
 
+
 class GitRevRepo(AbstractRepo):
     """
     Represents a Git repository at a specific revision.
@@ -133,12 +138,13 @@ class GitRevRepo(AbstractRepo):
     def read_file_path(self, file_path: Path) -> str:
         if self.commit is None:
             raise ValueError("Commit is not set. Cannot read files.")
-        
+
         try:
             blob = self.commit.tree / str(file_path)
-            return blob.data_stream.read().decode('utf-8')
+            return blob.data_stream.read().decode("utf-8")
         except KeyError:
             raise FileNotFoundError(f"File '{file_path}' does not exist in revision '{self.rev}'.")
+
 
 class FileSystemRepo(AbstractRepo):
     """
@@ -158,9 +164,10 @@ class FileSystemRepo(AbstractRepo):
         full_path = self.root_path / file_path
         if not full_path.exists():
             raise FileNotFoundError(f"File '{file_path}' does not exist in the filesystem repository.")
-        
-        with open(full_path, 'r', encoding='utf-8') as f:
+
+        with open(full_path, "r", encoding="utf-8") as f:
             return f.read()
+
 
 def get_repo(repo_path: Path, rev: str | None = None) -> AbstractRepo:
     """
@@ -182,7 +189,9 @@ def get_repo(repo_path: Path, rev: str | None = None) -> AbstractRepo:
                 commit = get_commit(git_repo, default_rev)
                 if commit is not None:
                     return GitRevRepo(git_repo, repo_path, default_rev)
-            raise ValueError(f"No revision specified and none of the default revisions ({', '.join(default_revisions)}) exist in the repository at '{repo_path}'.")
+            raise ValueError(
+                f"No revision specified and none of the default revisions ({', '.join(default_revisions)}) exist in the repository at '{repo_path}'."
+            )
     else:
         if rev is not None:
             raise ValueError(f"Revision '{rev}' specified but '{repo_path}' is not a Git repository.")

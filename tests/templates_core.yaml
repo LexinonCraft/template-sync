@@ -1,0 +1,21 @@
+version: snapshot
+
+templates:
+  typst-assignment:
+    description: Typst assignment template
+    parameters:
+      - title
+      - name: author
+        prompt: Author name
+        required: true
+      - name: year
+        default: 2026
+    files:
+      - source : templates/base.typ
+        target: base.typ
+        mode: static
+        jinja: false
+      - source: templates/doc.typ.j2
+        target: main.typ
+        mode: dynamic
+        jinja: true

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from click.testing import CliRunner
@@ -13,29 +12,10 @@ def _create_cli_repository(repo_root: Path) -> None:
     (repo_root / "templates" / "base.typ").write_text("STATIC\n", encoding="utf-8")
     (repo_root / "templates" / "doc.typ.j2").write_text("Hello {{ name }}\n", encoding="utf-8")
 
-    config = {
-        "templates": {
-            "assignment": {
-                "description": "Test template",
-                "parameters": ["name"],
-                "files": [
-                    {
-                        "source": "templates/base.typ",
-                        "target": "base.typ",
-                        "mode": "static",
-                        "jinja": False,
-                    },
-                    {
-                        "source": "templates/doc.typ.j2",
-                        "target": "main.typ",
-                        "mode": "dynamic",
-                        "jinja": True,
-                    },
-                ],
-            }
-        }
-    }
-    (repo_root / "templates.json").write_text(json.dumps(config), encoding="utf-8")
+    with open("tests/templates_cli.yaml", "r", encoding="utf-8") as f:
+        config = f.read()
+    config_path = repo_root / "templates.yaml"
+    config_path.write_text(config)
 
 
 def test_list_command_shows_templates(tmp_path: Path) -> None:
