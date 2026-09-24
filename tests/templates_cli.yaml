@@ -4,7 +4,7 @@ templates:
   assignment:
     description: Test template
     parameters:
-      - name
+      - name: name
     files:
       - source: templates/base.typ
         target: base.typ

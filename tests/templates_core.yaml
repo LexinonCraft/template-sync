@@ -4,7 +4,7 @@ templates:
   typst-assignment:
     description: Typst assignment template
     parameters:
-      - title
+      - name: title
       - name: author
         prompt: Author name
         required: true
