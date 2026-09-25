@@ -5,7 +5,6 @@ Core functionality for template-sync, including loading templates, applying them
 from __future__ import annotations
 
 import hashlib
-import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -28,6 +27,8 @@ from .model import (
 STATE_DIR_NAME = ".template-sync"
 STATE_FILE_NAME = "state.json"
 
+TEMPLATE_REPO_CONFIG_FILE_NAME = "templates.yaml"
+
 
 class TemplateSyncError(Exception):
     """Raised when template loading or application fails."""
@@ -39,7 +40,7 @@ class TemplateRepository:
     config: TemplateRepositoryConfig
 
 
-def load_template_repository(repo_path: Path, repo_rev: str | None = None, config_file: str = "templates.yaml") -> TemplateRepository:
+def load_template_repository(repo_path: Path, repo_rev: str | None = None, config_file: str | None = None) -> TemplateRepository:
     """Load and validate template repository configuration.
 
     Args:
@@ -55,7 +56,7 @@ def load_template_repository(repo_path: Path, repo_rev: str | None = None, confi
     """
     repo = get_repo(repo_path, rev=repo_rev)
 
-    config_content = repo.read_file(config_file)
+    config_content = repo.read_file(config_file or TEMPLATE_REPO_CONFIG_FILE_NAME)
     config = parse_template_repo_config(config_content)
 
     return TemplateRepository(repo=repo, config=config)
@@ -150,14 +151,17 @@ def apply_template(
     target = target_dir.expanduser().resolve()
     target.mkdir(parents=True, exist_ok=True)
 
+    for file_spec in template.files:
+        destination_path = (target / file_spec.target).resolve()
+        if destination_path.exists() and not force:
+            raise TemplateSyncError(f"Target file already exists: {destination_path}. Use --force to overwrite.")
+    if (target_dir / STATE_DIR_NAME / STATE_FILE_NAME).exists() and not force:
+        raise TemplateSyncError(f"State file already exists: {target_dir / STATE_DIR_NAME / STATE_FILE_NAME}. Use --force to overwrite.")
+
     written_files: list[dict[str, Any]] = []
     for file_spec in template.files:
         destination_path = (target / file_spec.target).resolve()
-        _validate_target_under_directory(target, destination_path, file_spec.target)
         destination_path.parent.mkdir(parents=True, exist_ok=True)
-
-        if destination_path.exists() and not force:
-            raise TemplateSyncError(f"Target file already exists: {destination_path}. Use --force to overwrite.")
 
         if file_spec.jinja:
             rendered = _render_template(repository.repo.read_file(file_spec.source), final_parameters)
@@ -178,11 +182,9 @@ def apply_template(
     state_file = write_state_file(
         repository=repository,
         template_name=template_name,
-        template=template,
         target_dir=target,
         parameters=final_parameters,
         file_records=written_files,
-        force=force,
     )
     return state_file
 
@@ -207,54 +209,12 @@ def _render_template(source: str, parameters: dict[str, str]) -> str:
         raise TemplateSyncError(f"Failed to render Jinja2 template: {exc}") from exc
 
 
-def _validate_source_under_repository(repository_root: Path, source_path: Path, source_label: str) -> None:
-    """Ensure a configured source file path stays inside the repository root.
-
-    Args:
-        repository_root: Canonical root directory of the template repository.
-        source_path: Resolved source path to validate.
-        source_label: Original source value from config for error reporting.
-
-    Returns:
-        None.
-
-    Raises:
-        TemplateSyncError: If source_path escapes repository_root.
-    """
-    try:
-        source_path.relative_to(repository_root)
-    except ValueError as exc:
-        raise TemplateSyncError(f"Template source path escapes repository root: {source_label}") from exc
-
-
-def _validate_target_under_directory(target_root: Path, target_path: Path, target_label: str) -> None:
-    """Ensure a configured destination file path stays inside target root.
-
-    Args:
-        target_root: Canonical destination directory.
-        target_path: Resolved destination path to validate.
-        target_label: Original target value from config for error reporting.
-
-    Returns:
-        None.
-
-    Raises:
-        TemplateSyncError: If target_path escapes target_root.
-    """
-    try:
-        target_path.relative_to(target_root)
-    except ValueError as exc:
-        raise TemplateSyncError(f"Target path escapes destination directory: {target_label}") from exc
-
-
 def write_state_file(
     repository: TemplateRepository,
     template_name: str,
-    template: TemplateDefinition,
     target_dir: Path,
     parameters: dict[str, str],
     file_records: list[dict[str, Any]],
-    force: bool,
 ) -> Path:
     """Write generation metadata used for traceability and future sync features.
 
@@ -264,7 +224,6 @@ def write_state_file(
         target_dir: Directory where output files were written.
         parameters: Final parameter values used for rendering.
         file_records: Per-file metadata records for generated files.
-        force: If True, overwrite existing state file.
 
     Returns:
         Path to the written state.json file.
@@ -272,9 +231,6 @@ def write_state_file(
     state_dir = target_dir / STATE_DIR_NAME
     state_dir.mkdir(parents=True, exist_ok=True)
     state_file = state_dir / STATE_FILE_NAME
-
-    if state_file.exists() and not force:
-        raise TemplateSyncError(f"State file already exists: {state_file}. Use --force to overwrite.")
 
     state = TemplateSyncState(
         generated_at=datetime.now(tz=UTC),
@@ -290,30 +246,6 @@ def write_state_file(
     )
     state_file.write_text(serialize_state_file(state), encoding="utf-8")
     return state_file
-
-
-def get_repository_commit(repository_root: Path) -> str | None:
-    """Read the current git commit hash for a repository, if available.
-
-    Args:
-        repository_root: Directory where the git command should run.
-
-    Returns:
-        Commit hash string, or None when git is unavailable or command fails.
-    """
-    try:
-        completed = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=repository_root,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except subprocess.SubprocessError, FileNotFoundError:
-        return None
-
-    commit = completed.stdout.strip()
-    return commit if commit else None
 
 
 def _sha256_file(content: str) -> str:

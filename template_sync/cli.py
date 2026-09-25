@@ -74,8 +74,8 @@ def _echo_note(message: str) -> None:
 
 @entrypoint.command("list")
 @click.option("--repo", "repo_path", required=True, type=click.Path(path_type=Path, exists=True, file_okay=False))
-@click.option("--config", "config_file", default="templates.yaml", show_default=True)
-def list_templates(repo_path: Path, config_file: str) -> None:
+@click.option("--config", "config_file", show_default=True)
+def list_templates(repo_path: Path, config_file: str | None = None) -> None:
     """List template names and summary info from a template repository.
 
     Args:
@@ -103,7 +103,7 @@ def list_templates(repo_path: Path, config_file: str) -> None:
 @click.option("--repo", "repo_path", required=True, type=click.Path(path_type=Path, exists=True, file_okay=False))
 @click.option("--rev", "repo_rev", default=None, help="Git revision to checkout in the repository.")
 @click.option("--target-dir", default=".", type=click.Path(path_type=Path, file_okay=False), show_default=True)
-@click.option("--config", "config_file", default="templates.yaml", show_default=True)
+@click.option("--config", "config_file", show_default=True, default=None)
 @click.option("-p", "--parameter", "parameter_overrides", multiple=True, help="Parameter override in KEY=VALUE form.")
 @click.option("--non-interactive", is_flag=True, help="Fail if required parameters are missing.")
 @click.option("--force", is_flag=True, help="Overwrite existing files in target directory.")  # TODO
@@ -112,7 +112,7 @@ def apply_template_command(
     repo_path: Path,
     repo_rev: str | None,
     target_dir: Path,
-    config_file: str,
+    config_file: str | None,
     parameter_overrides: tuple[str, ...],
     non_interactive: bool,
     force: bool,
