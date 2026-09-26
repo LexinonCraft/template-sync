@@ -43,11 +43,10 @@ def test_apply_command_non_interactive_writes_files(tmp_path: Path) -> None:
         entrypoint,
         [
             "apply",
+            str(target),
             "assignment",
             "--repo",
             str(repo_root),
-            "--target-dir",
-            str(target),
             "--non-interactive",
             "-p",
             "name=Lin",
@@ -69,7 +68,7 @@ def test_apply_command_interactive_selection_and_prompt(tmp_path: Path) -> None:
     runner = CliRunner()
     result = runner.invoke(
         entrypoint,
-        ["apply", "--repo", str(repo_root), "--target-dir", str(target)],
+        ["apply", str(target), "--repo", str(repo_root)],
         input="1\nNora\n",
     )
 

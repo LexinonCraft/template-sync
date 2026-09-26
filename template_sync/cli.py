@@ -76,15 +76,6 @@ def _echo_note(message: str) -> None:
 @click.option("--repo", "repo_path", required=True, type=click.Path(path_type=Path, exists=True, file_okay=False))
 @click.option("--config", "config_file", show_default=True)
 def list_templates(repo_path: Path, config_file: str | None = None) -> None:
-    """List template names and summary info from a template repository.
-
-    Args:
-        repo_path: Path to the template repository root.
-        config_file: Template config filename inside the repository.
-
-    Returns:
-        None.
-    """
     try:
         resolved_repo_path = repo_path.expanduser().resolve()
         repository = load_template_repository(repo_path=resolved_repo_path, config_file=config_file)
@@ -99,19 +90,19 @@ def list_templates(repo_path: Path, config_file: str | None = None) -> None:
 
 
 @entrypoint.command("apply", help="Apply a template from a repository to a target directory.")
+@click.argument("target_dir", type=click.Path(path_type=Path, file_okay=False))
 @click.argument("template_name", required=False)
 @click.option("--repo", "repo_path", required=True, type=click.Path(path_type=Path, exists=True, file_okay=False))
 @click.option("--rev", "repo_rev", default=None, help="Git revision to checkout in the repository.")
-@click.option("--target-dir", default=".", type=click.Path(path_type=Path, file_okay=False), show_default=True)
 @click.option("--config", "config_file", show_default=True, default=None)
 @click.option("-p", "--parameter", "parameter_overrides", multiple=True, help="Parameter override in KEY=VALUE form.")
 @click.option("--non-interactive", is_flag=True, help="Fail if required parameters are missing.")
 @click.option("--force", is_flag=True, help="Overwrite existing files in target directory.")  # TODO
 def apply_template_command(
+    target_dir: Path,
     template_name: str | None,
     repo_path: Path,
     repo_rev: str | None,
-    target_dir: Path,
     config_file: str | None,
     parameter_overrides: tuple[str, ...],
     non_interactive: bool,
@@ -128,13 +119,14 @@ def apply_template_command(
 
         parameter_values = parse_key_value_pairs(parameter_overrides)
         if not non_interactive:
-            parameter_values = _collect_missing_parameter_values(selected_template_name, selected_template, parameter_values)
+            parameter_values = _collect_missing_parameter_values(selected_template_name, selected_template, parameter_values, target_dir)
 
         state_file = apply_template(
             repository=repository,
             template=selected_template,
             template_name=selected_template_name,
             target_dir=target_dir,
+            current_dir=Path.cwd(),
             parameter_values=parameter_values,
             force=force,
         )
@@ -187,12 +179,15 @@ def _collect_missing_parameter_values(
     template_name: str,
     template: TemplateDefinition,
     current_values: dict[str, str],
+    target_dir: Path,
 ) -> dict[str, str]:
     """Prompt user for any template parameters that are still missing.
 
     Args:
+        template_name: The name of the template being processed.
         template: Template definition containing parameter metadata.
         current_values: Already provided parameter values.
+        target_dir: The target directory path, used for dirname_as_default parameters.
 
     Returns:
         Completed parameter map including prompted/defaulted values.
@@ -208,6 +203,10 @@ def _collect_missing_parameter_values(
             continue
 
         prompt_label = parameter.prompt or parameter.name
+        if parameter.dirname_as_default and target_dir.name:
+            values[parameter.name] = click.prompt(prompt_label, default=target_dir.name, show_default=True)
+            continue
+
         if parameter.default is not None:
             values[parameter.name] = click.prompt(prompt_label, default=parameter.default, show_default=True)
             continue

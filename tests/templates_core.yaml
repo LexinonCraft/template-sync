@@ -5,6 +5,8 @@ templates:
     description: Typst assignment template
     parameters:
       - name: title
+        default: Example
+        dirname_as_default: true
       - name: author
         prompt: Author name
         required: true

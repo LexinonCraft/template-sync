@@ -23,6 +23,7 @@ class ParameterDefinition(BaseModel):
     name: Annotated[str, BeforeValidator(coerce_to_str)]
     prompt: Annotated[str | None, BeforeValidator(coerce_to_str)] = None
     default: Annotated[str | None, BeforeValidator(coerce_to_str)] = None
+    dirname_as_default: bool = False
     required: bool = False
 
 

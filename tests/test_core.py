@@ -63,7 +63,8 @@ def test_apply_template_writes_rendered_files_and_state(tmp_path: Path) -> None:
         repository=repository,
         template_name="typst-assignment",
         template=template,
-        target_dir=target_dir,
+        target_dir=Path("."),
+        current_dir=target_dir,
         parameter_values={"title": "Sheet 1", "author": "Ada"},
         force=False,
     )
@@ -97,7 +98,8 @@ def test_apply_template_requires_missing_parameters(tmp_path: Path) -> None:
             repository=repository,
             template_name="typst-assignment",
             template=template,
-            target_dir=tmp_path / "target",
+            target_dir=Path("."),
+            current_dir=tmp_path / "target",
             parameter_values={"title": "Sheet 1"},
             force=False,
         )
@@ -121,7 +123,8 @@ def test_apply_template_force_overwrites_existing_files(tmp_path: Path) -> None:
             repository=repository,
             template_name="typst-assignment",
             template=template,
-            target_dir=target_dir,
+            target_dir=Path("."),
+            current_dir=target_dir,
             parameter_values={"title": "Sheet 1", "author": "Ada"},
             force=False,
         )
@@ -130,8 +133,31 @@ def test_apply_template_force_overwrites_existing_files(tmp_path: Path) -> None:
         repository=repository,
         template_name="typst-assignment",
         template=template,
-        target_dir=target_dir,
+        target_dir=Path("."),
+        current_dir=target_dir,
         parameter_values={"title": "Sheet 1", "author": "Ada"},
         force=True,
     )
     assert existing.read_text(encoding="utf-8") == "#set page(margin: 2cm)\n"
+
+
+def test_apply_template_dirname_as_default(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    target_dir = tmp_path / "target"
+    repo_root.mkdir()
+    _create_basic_repository(repo_root)
+
+    repository = load_template_repository(repo_root)
+    template = repository.config.templates["typst-assignment"]
+
+    apply_template(
+        repository=repository,
+        template_name="typst-assignment",
+        template=template,
+        target_dir=Path("Logic"),
+        current_dir=target_dir,
+        parameter_values={"author": "Kurt"},
+        force=True,
+    )
+    rendered = (target_dir / "Logic" / "main.typ").read_text(encoding="utf-8")
+    assert "= Logic" in rendered
