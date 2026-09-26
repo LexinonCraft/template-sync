@@ -127,6 +127,7 @@ Implemented now:
   - template repository commit hash (if available)
   - file-level metadata including static/dynamic mode and source checksum
 - automated tests with pytest for core logic and CLI behavior
+- overriding default parameter values and setting a default template in config files
 
 Not implemented yet:
 
@@ -134,7 +135,6 @@ Not implemented yet:
 - update static files from newer template versions
 - optional regeneration of dynamic files during update
 - compare target modifications against source templates and push back changes to template repository branches
-- parent-directory preset configs for creating new subdirectories with partially prefilled parameters
 
 ## Template Config Shape
 

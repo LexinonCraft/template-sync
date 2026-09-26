@@ -6,6 +6,7 @@ import yaml
 from pydantic import BaseModel, BeforeValidator
 
 CURRENT_TEMPLATE_REPO_CONFIG_VERSION = 1
+CURRENT_DEFAULTS_CONFIG_VERSION = 1
 CURRENT_STATE_SCHEMA_VERSION = 1
 
 
@@ -69,6 +70,39 @@ def parse_template_repo_config(config: str) -> TemplateRepositoryConfig:
     # here we could apply migration logic
 
     return TemplateRepositoryConfig.model_validate(config_data)
+
+
+# Model definitions for defaults configuration (template-sync.yaml)
+
+
+class DefaultsConfig(BaseModel):
+    version: int | Literal["snapshot"]
+    default_parameters: dict[Annotated[str, BeforeValidator(coerce_to_str)], Annotated[str, BeforeValidator(coerce_to_str)]]
+    default_template: Annotated[str, BeforeValidator(coerce_to_str)] | None = None
+
+
+def parse_defaults_config(config: str) -> DefaultsConfig:
+    """
+    Parse a YAML string into a DefaultsConfig object.
+
+    Args:
+        config (str): YAML string of the defaults configuration.
+
+    Returns:
+        DefaultsConfig: The parsed defaults configuration.
+    """
+    config_data = yaml.safe_load(config)
+
+    if not isinstance(config_data, dict):
+        raise TypeError("Defaults config data must be a dictionary")
+
+    schema_version = config_data.get("version")
+    if schema_version is None:
+        raise ValueError("Missing defaults config schema version")
+    if schema_version not in [CURRENT_DEFAULTS_CONFIG_VERSION, "snapshot"]:
+        raise ValueError(f"Unsupported defaults config schema version: {schema_version}")
+
+    return DefaultsConfig.model_validate(config_data)
 
 
 # Model definitions for state file

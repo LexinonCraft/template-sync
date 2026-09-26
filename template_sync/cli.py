@@ -10,12 +10,14 @@ import click
 from more_termcolor import colored
 
 from template_sync.core import (
+    DEFAULTS_CONFIG_FILE_NAME,
     TemplateDefinition,
     TemplateSyncError,
     apply_template,
     load_template_repository,
     parse_key_value_pairs,
 )
+from template_sync.model import DefaultsConfig, parse_defaults_config
 
 
 @click.group(help="Manage and apply template bundles from a repository.")
@@ -111,7 +113,20 @@ def apply_template_command(
     try:
         resolved_repo_path = repo_path.expanduser().resolve()
         repository = load_template_repository(repo_path=resolved_repo_path, repo_rev=repo_rev, config_file=config_file)
-        selected_template_name, selected_template = _resolve_template_selection(repository.config.templates, template_name)
+
+        defaults_config_path = Path(DEFAULTS_CONFIG_FILE_NAME)
+        default_parameter_overrides = {}
+        defaults_config: DefaultsConfig | None = None
+        if defaults_config_path.exists():
+            with defaults_config_path.open() as f:
+                _defaults_config = parse_defaults_config(f.read())
+                default_parameter_overrides = _defaults_config.default_parameters
+                defaults_config = _defaults_config
+
+        selected_template_name, selected_template = _resolve_template_selection(
+            repository.config.templates,
+            template_name or (defaults_config.default_template if defaults_config and defaults_config.default_template else None),
+        )
         _echo_info(
             f"Using template '{selected_template_name}' from {resolved_repo_path}{f" at revision '{repository.repo.get_ref()}'" if repository.repo.get_ref() else ''}."
         )
@@ -119,8 +134,9 @@ def apply_template_command(
 
         parameter_values = parse_key_value_pairs(parameter_overrides)
         if not non_interactive:
-            parameter_values = _collect_missing_parameter_values(selected_template_name, selected_template, parameter_values, target_dir)
-
+            parameter_values = _collect_missing_parameter_values(
+                selected_template_name, selected_template, parameter_values, default_parameter_overrides, target_dir
+            )
         state_file = apply_template(
             repository=repository,
             template=selected_template,
@@ -179,6 +195,7 @@ def _collect_missing_parameter_values(
     template_name: str,
     template: TemplateDefinition,
     current_values: dict[str, str],
+    default_parameter_overrides: dict[str, str],
     target_dir: Path,
 ) -> dict[str, str]:
     """Prompt user for any template parameters that are still missing.
@@ -187,6 +204,7 @@ def _collect_missing_parameter_values(
         template_name: The name of the template being processed.
         template: Template definition containing parameter metadata.
         current_values: Already provided parameter values.
+        default_parameter_overrides: Default values for template parameters from the defaults configuration.
         target_dir: The target directory path, used for dirname_as_default parameters.
 
     Returns:
@@ -209,6 +227,10 @@ def _collect_missing_parameter_values(
 
         if parameter.default is not None:
             values[parameter.name] = click.prompt(prompt_label, default=parameter.default, show_default=True)
+            continue
+
+        if parameter.name in default_parameter_overrides:
+            values[parameter.name] = click.prompt(prompt_label, default=default_parameter_overrides[parameter.name], show_default=True)
             continue
 
         if parameter.required:

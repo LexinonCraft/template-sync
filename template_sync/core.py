@@ -28,6 +28,7 @@ STATE_DIR_NAME = ".template-sync"
 STATE_FILE_NAME = "state.json"
 
 TEMPLATE_REPO_CONFIG_FILE_NAME = "templates.yaml"
+DEFAULTS_CONFIG_FILE_NAME = "template-sync.yaml"
 
 
 class TemplateSyncError(Exception):
