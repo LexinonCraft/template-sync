@@ -76,3 +76,43 @@ def test_apply_command_interactive_selection_and_prompt(tmp_path: Path) -> None:
     assert "Choose a template" in result.output
     assert "1 argument(s) missing for template 'assignment'." in result.output
     assert (target / "main.typ").read_text(encoding="utf-8") == "Hello Nora\n"
+
+
+def test_regenerate_command_inplace(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _create_cli_repository(repo_root)
+
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        apply_result = runner.invoke(
+            entrypoint,
+            ["apply", ".", "assignment", "--repo", str(repo_root), "--non-interactive", "-p", "name=Lin"],
+        )
+        assert apply_result.exit_code == 0
+
+        Path("base.typ").write_text("MODIFIED\n", encoding="utf-8")
+        result = runner.invoke(entrypoint, ["regenerate", "--inplace", "base.typ"])
+
+        assert result.exit_code == 0
+        assert "1 file(s) regenerated." in result.output
+        assert Path("base.typ").read_text(encoding="utf-8") == "STATIC\n"
+
+
+def test_regenerate_command_prints_rendered_file(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _create_cli_repository(repo_root)
+
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        apply_result = runner.invoke(
+            entrypoint,
+            ["apply", ".", "assignment", "--repo", str(repo_root), "--non-interactive", "-p", "name=Lin"],
+        )
+        assert apply_result.exit_code == 0
+
+        result = runner.invoke(entrypoint, ["regenerate", "main.typ"])
+
+        assert result.exit_code == 0
+        assert result.output == "Hello Lin\n\n"

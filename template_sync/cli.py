@@ -11,13 +11,18 @@ from more_termcolor import colored
 
 from template_sync.core import (
     DEFAULTS_CONFIG_FILE_NAME,
+    STATE_DIR_NAME,
+    STATE_FILE_NAME,
     TemplateDefinition,
     TemplateSyncError,
     apply_template,
+    get_file_definition_for_target_file,
     load_template_repository,
     parse_key_value_pairs,
+    render_file,
+    write_rendered_file,
 )
-from template_sync.model import DefaultsConfig, parse_defaults_config
+from template_sync.model import DefaultsConfig, parse_defaults_config, parse_state_file
 
 
 @click.group(help="Manage and apply template bundles from a repository.")
@@ -151,6 +156,52 @@ def apply_template_command(
 
     _echo_success(f"Applied template '{selected_template_name}' to {target_dir.resolve()}")
     _echo_note(f"State written to: {state_file}")
+
+
+@entrypoint.command(
+    "regenerate", help="Regenerate files from the template (all static files are regenerated if no files are specified)"
+)  # TODO
+@click.argument(
+    "files",
+    nargs=-1,
+)
+@click.option("-i", "--inplace", is_flag=True, help="Regenerate files in place")
+@click.option("-d", "--dynamic", is_flag=True, help="Also regenerate dynamic files (if files are not explicitly listed)")
+def regenerate_files_command(files: list[str], inplace: bool, dynamic: bool):
+    """Regenerate files from the template."""
+    state_file_path = Path.cwd() / STATE_DIR_NAME / STATE_FILE_NAME
+    with open(state_file_path, "r") as state_file:
+        state_file_content = state_file.read()
+    state = parse_state_file(state_file_content)
+    repository = load_template_repository(
+        repo_path=Path(state.template_repository.path),
+        repo_rev=state.template_repository.commit,
+        config_file=state.template_repository.config_file,
+    )
+
+    if inplace:
+        if len(files) > 0:
+            file_definitions = []
+            for file in files:
+                file_definition = get_file_definition_for_target_file(repository, state.template, Path(file))
+                if file_definition is None:
+                    raise click.ClickException(f"Source file for target '{file}' not found in the template.")
+                if file_definition.mode == "dynamic" and not dynamic:
+                    continue
+                file_definitions.append(file_definition)
+        else:
+            file_definitions = repository.config.templates[state.template].files
+        for file_definition in file_definitions:
+            write_rendered_file(repository, file_definition, state.parameters, Path(file_definition.target))
+        _echo_info(f"{len(file_definitions)} file(s) regenerated.")
+    else:
+        if len(files) != 1:
+            raise click.ClickException("Must specify exactly one file if not regenerating inplace.")
+        file_to_regenerate = files[0]
+        file_definition = get_file_definition_for_target_file(repository, state.template, Path(file_to_regenerate))
+        if file_definition is None:
+            raise click.ClickException(f"Source file for target '{file_to_regenerate}' not found in the template.")
+        click.echo(render_file(repository, file_definition, state.parameters))
 
 
 def _resolve_template_selection(

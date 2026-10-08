@@ -14,6 +14,7 @@ from jinja2 import StrictUndefined, Template
 
 from .git_utils import AbstractRepo, get_repo
 from .model import (
+    FileDefinition,
     ParameterDefinition,
     StateFileRecord,
     StateTemplateRepository,
@@ -172,7 +173,7 @@ def apply_template(
         destination_path.parent.mkdir(parents=True, exist_ok=True)
 
         if file_spec.jinja:
-            rendered = _render_template(repository.repo.read_file(file_spec.source), final_parameters)
+            rendered = render_template(repository.repo.read_file(file_spec.source), final_parameters)
             destination_path.write_text(rendered, encoding="utf-8")
         else:
             repository.repo.copy_file(Path(file_spec.source), destination_path)
@@ -197,7 +198,7 @@ def apply_template(
     return state_file
 
 
-def _render_template(source: str, parameters: dict[str, str]) -> str:
+def render_template(source: str, parameters: dict[str, str]) -> str:
     """Render a Jinja2 template file with strict variable handling.
 
     Args:
@@ -268,3 +269,52 @@ def _sha256_file(content: str) -> str:
     digest = hashlib.sha256()
     digest.update(content.encode("utf-8"))
     return digest.hexdigest()
+
+
+def get_file_definition_for_target_file(repository: TemplateRepository, template: str, target_file: Path) -> FileDefinition | None:
+    """Get the template file details corresponding to the target file.
+
+    Args:
+        repository: The template repository.
+        template: The name of the template within the repository.
+        target_file: The target file path within the template output. This should be relative to the template root.
+
+    Returns:
+        The FileDefinition corresponding to the target file, or None if it doesn't exist.
+    """
+    for file in repository.config.templates[template].files:
+        if Path(file.target) == target_file:
+            return file
+    return None
+
+
+def render_file(repository: TemplateRepository, file_definition: FileDefinition, parameters: dict[str, str]) -> str:
+    """Render a template file with the given parameters.
+
+    Args:
+        repository: The template repository.
+        file_definition: The file definition of the template file to render.
+        parameters: The parameters to use for rendering.
+
+    Returns:
+        The rendered file content as a string.
+    """
+    if file_definition.jinja:
+        return render_template(repository.repo.read_file(file_definition.source), parameters)
+    else:
+        return repository.repo.read_file(file_definition.source)
+
+
+def write_rendered_file(
+    repository: TemplateRepository, file_definition: FileDefinition, parameters: dict[str, str], output_path: Path
+) -> None:
+    """Render a template file and write it to the specified output path.
+
+    Args:
+        repository: The template repository.
+        file_definition: The file definition of the template file to render.
+        parameters: The parameters to use for rendering.
+        output_path: The path to write the rendered file to.
+    """
+    content = render_file(repository, file_definition, parameters)
+    output_path.write_text(content, encoding="utf-8")
