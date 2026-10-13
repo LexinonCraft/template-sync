@@ -90,6 +90,15 @@ class AbstractRepo(ABC):
             Contents of the file as a string.
         """
 
+    @abstractmethod
+    def as_git_repo(self) -> git.Repo | None:
+        """
+        Get the underlying Git repository object if available.
+
+        Returns:
+            Git repository object if this is a Git repository, otherwise None.
+        """
+
     def read_file(self, file_path: str) -> str:
         """
         Read the contents of a file in the repository.
@@ -145,6 +154,9 @@ class GitRevRepo(AbstractRepo):
         except KeyError:
             raise FileNotFoundError(f"File '{file_path}' does not exist in revision '{self.rev}'.")
 
+    def as_git_repo(self) -> git.Repo | None:
+        return self.repo
+
 
 class FileSystemRepo(AbstractRepo):
     """
@@ -167,6 +179,9 @@ class FileSystemRepo(AbstractRepo):
 
         with open(full_path, "r", encoding="utf-8") as f:
             return f.read()
+
+    def as_git_repo(self) -> git.Repo | None:
+        return None
 
 
 def get_repo(repo_path: Path, rev: str | None = None) -> AbstractRepo:

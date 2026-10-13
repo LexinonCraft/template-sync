@@ -21,6 +21,7 @@ from template_sync.core import (
     regenerate_files,
     render_file,
     sha256_file,
+    sha256_str,
     write_state_file,
 )
 from template_sync.model import DefaultsConfig, parse_defaults_config
@@ -207,17 +208,25 @@ def update_template_command(
 ):
     """Update the template to a specified revision."""
     state, _ = load_state_and_repository(Path.cwd())
-    if not force and not keep_files:
-        for file in state.files.values():
-            if file.mode == "static" and sha256_file(Path(file.target)) != file.source_sha256:
-                raise click.ClickException(
-                    f"The changes to '{file.target}' would be overwritten by the update. Re-run with --force or --keep-files."
-                )
     new_repository = load_template_repository(
         Path(state.template_repository.path),
         revision if revision is not None else state.template_repository.ref,
         state.template_repository.config_file,
     )
+    if not force and not keep_files:
+        overwritten_files = []
+        for file in state.files.values():
+            file_hash = sha256_file(Path(file.target))
+            if (
+                file.mode == "static"
+                and file_hash != file.source_sha256
+                and file_hash != sha256_str(new_repository.repo.read_file(file.source))
+            ):
+                overwritten_files.append(file.target)
+        if overwritten_files:
+            raise click.ClickException(
+                f"The changes to the following static files would be overwritten by the update: {', '.join(overwritten_files)}. Re-run with --force or --keep-files."
+            )
     defaults_config_path = Path(DEFAULTS_CONFIG_FILE_NAME)  # TODO
     default_parameter_overrides = {}
     if defaults_config_path.exists():
@@ -243,6 +252,28 @@ def update_template_command(
             (file for file in new_repository.config.templates[state.template].files if file.mode == "static"),
         )
     write_state_file(state, Path.cwd())
+    _echo_success("Template update completed.")
+
+
+@entrypoint.command("merge", help="Merge back changes made to static non-Jinja template files.")
+@click.argument("branch_name")
+@click.option("--base", "base_rev", help="Base revision to create a new branch from.")
+@click.option("--force", is_flag=True, help="Discard changes in the working directory of the repository.")
+def merge_back_command(branch_name: str, base_rev: str | None, force: bool):
+    """Handle the merge-back operation for template changes."""
+    state, repo = load_state_and_repository(Path.cwd())
+    git_repo = repo.repo.as_git_repo()
+    if git_repo is None:
+        raise click.ClickException(f"The repository at '{repo.repo.get_root()}' is not a Git repository.")
+    git_repo.create_head(branch_name, base_rev if base_rev is not None else state.template_repository.ref)
+    git_repo.heads[branch_name].checkout(force=force)
+    for file in state.files.values():
+        if file.mode == "static" and not file.jinja:
+            with open(Path.cwd() / file.target, "r", encoding="utf-8") as f:
+                content = f.read()
+            with open(Path(state.template_repository.path) / file.source, "w", encoding="utf-8") as f:
+                f.write(content)
+    _echo_success(f"Created branch '{branch_name}' for merging back changes.")
 
 
 def _resolve_template_selection(

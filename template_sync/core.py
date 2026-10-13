@@ -185,7 +185,7 @@ def apply_template(
                 target=str(destination_path.relative_to(target)),
                 mode=file_spec.mode,
                 jinja=file_spec.jinja,
-                source_sha256=_sha256_str(repository.repo.read_file(file_spec.source)),
+                source_sha256=sha256_str(repository.repo.read_file(file_spec.source)),
             )
         )
 
@@ -270,7 +270,7 @@ def write_state_file(state: TemplateSyncState, target_dir: Path) -> Path:
     return state_file
 
 
-def _sha256_str(content: str) -> str:
+def sha256_str(content: str) -> str:
     """Compute SHA-256 checksum for a string.
 
     Args:
@@ -347,7 +347,7 @@ def write_rendered_file(
     """
     content = render_file(repository, file_definition, parameters)
     output_path.write_text(content, encoding="utf-8")
-    return _sha256_str(content)
+    return sha256_str(content)
 
 
 def load_state_and_repository(target_dir: Path) -> tuple[TemplateSyncState, TemplateRepository]:
