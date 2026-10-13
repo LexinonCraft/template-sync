@@ -5,10 +5,10 @@ Core functionality for template-sync, including loading templates, applying them
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Generator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 from jinja2 import StrictUndefined, Template
 
@@ -21,6 +21,7 @@ from .model import (
     TemplateDefinition,
     TemplateRepositoryConfig,
     TemplateSyncState,
+    parse_state_file,
     parse_template_repo_config,
     serialize_state_file,
 )
@@ -167,7 +168,7 @@ def apply_template(
     if (target / STATE_DIR_NAME / STATE_FILE_NAME).exists() and not force:
         raise TemplateSyncError(f"State file already exists: {target_dir / STATE_DIR_NAME / STATE_FILE_NAME}. Use --force to overwrite.")
 
-    written_files: list[dict[str, Any]] = []
+    written_files: list[StateFileRecord] = []
     for file_spec in template.files:
         destination_path = (target / file_spec.target).resolve()
         destination_path.parent.mkdir(parents=True, exist_ok=True)
@@ -179,16 +180,16 @@ def apply_template(
             repository.repo.copy_file(Path(file_spec.source), destination_path)
 
         written_files.append(
-            {
-                "source": file_spec.source,
-                "target": str(destination_path.relative_to(target)),
-                "mode": file_spec.mode,
-                "jinja": file_spec.jinja,
-                "source_sha256": _sha256_file(repository.repo.read_file(file_spec.source)),
-            }
+            StateFileRecord(
+                source=file_spec.source,
+                target=str(destination_path.relative_to(target)),
+                mode=file_spec.mode,
+                jinja=file_spec.jinja,
+                source_sha256=_sha256_str(repository.repo.read_file(file_spec.source)),
+            )
         )
 
-    state_file = write_state_file(
+    state_file = create_state_file(
         repository=repository,
         template_name=template_name,
         target_dir=target,
@@ -218,12 +219,12 @@ def render_template(source: str, parameters: dict[str, str]) -> str:
         raise TemplateSyncError(f"Failed to render Jinja2 template: {exc}") from exc
 
 
-def write_state_file(
+def create_state_file(
     repository: TemplateRepository,
     template_name: str,
     target_dir: Path,
     parameters: dict[str, str],
-    file_records: list[dict[str, Any]],
+    file_records: list[StateFileRecord],
 ) -> Path:
     """Write generation metadata used for traceability and future sync features.
 
@@ -237,10 +238,6 @@ def write_state_file(
     Returns:
         Path to the written state.json file.
     """
-    state_dir = target_dir / STATE_DIR_NAME
-    state_dir.mkdir(parents=True, exist_ok=True)
-    state_file = state_dir / STATE_FILE_NAME
-
     state = TemplateSyncState(
         generated_at=datetime.now(tz=UTC),
         template=template_name,
@@ -251,23 +248,55 @@ def write_state_file(
             ref=repository.repo.get_ref(),
             commit=repository.repo.get_commit_hash(),
         ),
-        files=[StateFileRecord(**file_record) for file_record in file_records],
+        files={file_record.target: file_record for file_record in file_records},
     )
+    return write_state_file(state, target_dir)
+
+
+def write_state_file(state: TemplateSyncState, target_dir: Path) -> Path:
+    """Write the current state to the state file.
+
+    Args:
+        state: The current template sync state.
+        target_dir: The directory where the state file should be written.
+
+    Returns:
+        Path to the written state.json file.
+    """
+    state_dir = target_dir / STATE_DIR_NAME
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_file = state_dir / STATE_FILE_NAME
     state_file.write_text(serialize_state_file(state), encoding="utf-8")
     return state_file
 
 
-def _sha256_file(content: str) -> str:
+def _sha256_str(content: str) -> str:
+    """Compute SHA-256 checksum for a string.
+
+    Args:
+        content: String to hash.
+
+    Returns:
+        Lowercase hex digest of the string.
+    """
+    digest = hashlib.sha256()
+    digest.update(content.encode("utf-8"))
+    return digest.hexdigest()
+
+
+def sha256_file(file_path: Path) -> str:
     """Compute SHA-256 checksum for a file.
 
     Args:
-        content: File content to hash.
+        file_path: Path to the file to hash.
 
     Returns:
         Lowercase hex digest of the file contents.
     """
     digest = hashlib.sha256()
-    digest.update(content.encode("utf-8"))
+    with file_path.open("rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            digest.update(chunk)
     return digest.hexdigest()
 
 
@@ -307,7 +336,7 @@ def render_file(repository: TemplateRepository, file_definition: FileDefinition,
 
 def write_rendered_file(
     repository: TemplateRepository, file_definition: FileDefinition, parameters: dict[str, str], output_path: Path
-) -> None:
+) -> str:
     """Render a template file and write it to the specified output path.
 
     Args:
@@ -318,3 +347,47 @@ def write_rendered_file(
     """
     content = render_file(repository, file_definition, parameters)
     output_path.write_text(content, encoding="utf-8")
+    return _sha256_str(content)
+
+
+def load_state_and_repository(target_dir: Path) -> tuple[TemplateSyncState, TemplateRepository]:
+    """Load the state file and the corresponding template repository.
+
+    Args:
+        target_dir: The target directory containing the state file.
+
+    Returns:
+        A tuple containing the loaded TemplateSyncState and TemplateRepository.
+    """
+    state_file_path = target_dir / STATE_DIR_NAME / STATE_FILE_NAME
+    with open(state_file_path, "r") as state_file:
+        state_file_content = state_file.read()
+    state = parse_state_file(state_file_content)
+    repository = load_template_repository(
+        repo_path=Path(state.template_repository.path),
+        repo_rev=state.template_repository.commit,
+        config_file=state.template_repository.config_file,
+    )
+    return state, repository
+
+
+def regenerate_files(state: TemplateSyncState, repository: TemplateRepository, target_dir: Path, files: Generator[FileDefinition]) -> None:
+    """Regenerate the specified files in the target directory (also updates the state file).
+
+    Args:
+        state: The current TemplateSyncState.
+        repository: The template repository corresponding to the state.
+        target_dir: The target directory containing the files.
+        files: A list of FileDefinition objects representing the files to regenerate.
+    """
+    for file in files:
+        output_path = target_dir / file.target
+        file_hash = write_rendered_file(repository, file, state.parameters, output_path)
+        state.files[file.target] = StateFileRecord(
+            source=file.source,
+            target=file.target,
+            mode=file.mode,
+            jinja=file.jinja,
+            source_sha256=file_hash,
+        )
+    write_state_file(state, target_dir)

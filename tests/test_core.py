@@ -82,7 +82,7 @@ def test_apply_template_writes_rendered_files_and_state(tmp_path: Path) -> None:
     assert state["template_repository"]["path"] == str(repo_root.resolve())
     assert state["template_repository"]["commit"] is None
     assert len(state["files"]) == 2
-    assert {entry["mode"] for entry in state["files"]} == {"static", "dynamic"}
+    assert {entry["mode"] for entry in state["files"].values()} == {"static", "dynamic"}
 
 
 def test_apply_template_requires_missing_parameters(tmp_path: Path) -> None:

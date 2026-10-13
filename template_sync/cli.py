@@ -11,18 +11,19 @@ from more_termcolor import colored
 
 from template_sync.core import (
     DEFAULTS_CONFIG_FILE_NAME,
-    STATE_DIR_NAME,
-    STATE_FILE_NAME,
     TemplateDefinition,
     TemplateSyncError,
     apply_template,
     get_file_definition_for_target_file,
+    load_state_and_repository,
     load_template_repository,
     parse_key_value_pairs,
+    regenerate_files,
     render_file,
-    write_rendered_file,
+    sha256_file,
+    write_state_file,
 )
-from template_sync.model import DefaultsConfig, parse_defaults_config, parse_state_file
+from template_sync.model import DefaultsConfig, parse_defaults_config
 
 
 @click.group(help="Manage and apply template bundles from a repository.")
@@ -165,19 +166,11 @@ def apply_template_command(
     "files",
     nargs=-1,
 )
-@click.option("-i", "--inplace", is_flag=True, help="Regenerate files in place")
-@click.option("-d", "--dynamic", is_flag=True, help="Also regenerate dynamic files (if files are not explicitly listed)")
+@click.option("--inplace", "inplace", is_flag=True, help="Regenerate files in place")
+@click.option("--dynamic", "dynamic", is_flag=True, help="Also regenerate dynamic files (if files are not explicitly listed)")
 def regenerate_files_command(files: list[str], inplace: bool, dynamic: bool):
     """Regenerate files from the template."""
-    state_file_path = Path.cwd() / STATE_DIR_NAME / STATE_FILE_NAME
-    with open(state_file_path, "r") as state_file:
-        state_file_content = state_file.read()
-    state = parse_state_file(state_file_content)
-    repository = load_template_repository(
-        repo_path=Path(state.template_repository.path),
-        repo_rev=state.template_repository.commit,
-        config_file=state.template_repository.config_file,
-    )
+    state, repository = load_state_and_repository(Path.cwd())
 
     if inplace:
         if len(files) > 0:
@@ -191,8 +184,7 @@ def regenerate_files_command(files: list[str], inplace: bool, dynamic: bool):
                 file_definitions.append(file_definition)
         else:
             file_definitions = repository.config.templates[state.template].files
-        for file_definition in file_definitions:
-            write_rendered_file(repository, file_definition, state.parameters, Path(file_definition.target))
+        regenerate_files(state, repository, Path.cwd(), (file for file in file_definitions))
         _echo_info(f"{len(file_definitions)} file(s) regenerated.")
     else:
         if len(files) != 1:
@@ -202,6 +194,55 @@ def regenerate_files_command(files: list[str], inplace: bool, dynamic: bool):
         if file_definition is None:
             raise click.ClickException(f"Source file for target '{file_to_regenerate}' not found in the template.")
         click.echo(render_file(repository, file_definition, state.parameters))
+
+
+@entrypoint.command("update", help="Change the version of the template.")
+@click.option("--rev", "revision", default=None, help="The revision of the template to update to.")
+@click.option("--keep-files", "keep_files", is_flag=True, help="Do not modify static template files.")
+@click.option("--force", "force", is_flag=True, help="Force update even if static files have been modified.")
+@click.option("-p", "--parameter", "parameter_overrides", multiple=True, help="Parameter override in KEY=VALUE form.")
+@click.option("--non-interactive", is_flag=True, help="Fail if required parameters are missing.")
+def update_template_command(
+    revision: str | None, keep_files: bool, force: bool, parameter_overrides: tuple[str, ...], non_interactive: bool
+):
+    """Update the template to a specified revision."""
+    state, _ = load_state_and_repository(Path.cwd())
+    if not force and not keep_files:
+        for file in state.files.values():
+            if file.mode == "static" and sha256_file(Path(file.target)) != file.source_sha256:
+                raise click.ClickException(
+                    f"The changes to '{file.target}' would be overwritten by the update. Re-run with --force or --keep-files."
+                )
+    new_repository = load_template_repository(
+        Path(state.template_repository.path),
+        revision if revision is not None else state.template_repository.ref,
+        state.template_repository.config_file,
+    )
+    defaults_config_path = Path(DEFAULTS_CONFIG_FILE_NAME)  # TODO
+    default_parameter_overrides = {}
+    if defaults_config_path.exists():
+        with defaults_config_path.open() as f:
+            _defaults_config = parse_defaults_config(f.read())
+            default_parameter_overrides = _defaults_config.default_parameters
+    values = _collect_missing_parameter_values(
+        state.template,
+        new_repository.config.templates[state.template],
+        state.parameters,
+        default_parameter_overrides,
+        Path.cwd(),
+    )
+
+    state.template_repository.ref = new_repository.repo.get_ref()
+    state.template_repository.commit = new_repository.repo.get_commit_hash()
+    state.parameters = values
+    if not keep_files:
+        regenerate_files(
+            state,
+            new_repository,
+            Path.cwd(),
+            (file for file in new_repository.config.templates[state.template].files if file.mode == "static"),
+        )
+    write_state_file(state, Path.cwd())
 
 
 def _resolve_template_selection(

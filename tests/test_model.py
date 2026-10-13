@@ -9,15 +9,15 @@ from template_sync.model import parse_state_file, serialize_state_file
 
 def _valid_state() -> dict:
     return {
-        "files": [
-            {
+        "files": {
+            "test.tex": {
                 "jinja": True,
                 "mode": "dynamic",
                 "source": "test.tex.jinja2",
                 "source_sha256": "4d833aed5e4294f96b4562608db21972e378d28184be32ea8a61a566cb7b988c",
                 "target": "test.tex",
             }
-        ],
+        },
         "generated_at": "2026-09-20T15:15:54.586995+00:00",
         "parameters": {"class_name": "Logik I", "student_name": "Merle", "year": "2026"},
         "schema_version": 1,
@@ -37,7 +37,7 @@ def test_parse_state_file_validates_attached_state_shape() -> None:
     assert state.template == "latex-assignment"
     assert state.generated_at.year == 2026
     assert state.parameters["student_name"] == "Merle"
-    assert state.files[0].source_sha256.startswith("4d833a")
+    assert state.files["test.tex"].source_sha256.startswith("4d833a")
     assert state.template_repository.commit is not None
 
 
@@ -55,7 +55,7 @@ def test_serialize_state_file_round_trips() -> None:
     [
         ("schema_version", 2, "Unsupported state schema version"),
         ("generated_at", "yesterday", "ISO-8601 timestamp"),
-        ("files", {}, "must be a list"),
+        ("files", {}, "must be a dict"),
     ],
 )
 @pytest.mark.skip()  # TODO
@@ -70,7 +70,7 @@ def test_parse_state_file_rejects_invalid_top_level_fields(field: str, value: ob
 @pytest.mark.skip(reason="Checksum validation not implemented yet")  # TODO
 def test_parse_state_file_rejects_invalid_checksum() -> None:
     state = _valid_state()
-    state["files"][0]["source_sha256"] = "not-a-checksum"
+    state["files"]["test.tex"]["source_sha256"] = "not-a-checksum"
 
     with pytest.raises(ValueError, match="SHA-256"):
         parse_state_file(json.dumps(state))

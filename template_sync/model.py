@@ -129,7 +129,7 @@ class TemplateSyncState(BaseModel):
     template: str
     parameters: dict[str, str]
     template_repository: StateTemplateRepository
-    files: list[StateFileRecord]
+    files: dict[str, StateFileRecord]
 
 
 def parse_state_file(state: str) -> TemplateSyncState:
